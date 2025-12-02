@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 # Load env variables (works locally, ignored on Railway)
 load_dotenv()
+# debug presence only — safe: does NOT print secret values
+present = {k: (k in os.environ) for k in ("GOOGLE_API_KEY", "TELEGRAM_TOKEN")}
+logger.info("Env presence check: %s", present)
+
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
