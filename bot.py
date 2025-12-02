@@ -15,7 +15,7 @@ from telegram.ext import (
 import google.generativeai as genai
 
 # --------------------------
-# LOGGING (All errors here)
+# LOGGING (errors visible only in terminal)
 # --------------------------
 logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(message)s',
@@ -23,30 +23,35 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
+# Load env variables (works locally, ignored on Railway)
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-if not GOOGLE_API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found in .env")
-if not TELEGRAM_TOKEN:
-    raise ValueError("TELEGRAM_TOKEN not found in .env")
+# --------------------------
+# Validate environment variables
+# --------------------------
+if not GOOGLE_API_KEY or not TELEGRAM_TOKEN:
+    raise ValueError(
+        "Missing environment variables. "
+        "Make sure GOOGLE_API_KEY and TELEGRAM_TOKEN are set in Railway → Variables."
+    )
 
+# Configure Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-2.0-flash")
 
 
 # --------------------------
-# START COMMAND
+# /start command
 # --------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! Send me a sentence.")
+    await update.message.reply_text("Hello! Send me a sentence to analyze.")
 
 
 # --------------------------
-# ANALYZE TEXT
+# Grammar analysis handler
 # --------------------------
 async def analyze_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text or ""
@@ -76,7 +81,7 @@ Analyze the following text and return a response in this EXACT format:
 [text]
 
 Rules:
-- If multiple errors exist, repeat the "🔍 ERRORS FOUND" section for each.
+- If multiple errors exist, repeat the '🔍 ERRORS FOUND' section for each.
 - Output plain text only. No markdown fences.
 Text to analyze: {user_text}
 """
@@ -90,18 +95,15 @@ Text to analyze: {user_text}
         else:
             await status_msg.delete()
             for i in range(0, len(output_text), MAX_LEN):
-                await update.message.reply_text(output_text[i:i + MAX_LEN])
+                await update.message.reply_text(output_text[i:i+MAX_LEN])
 
     except Exception as e:
-        # Log error only in terminal
         logger.error("Error while processing text:", exc_info=True)
-
-        # User-friendly message
         await status_msg.edit_text("⚠️ Sorry, something went wrong. Please try again.")
-        
+
 
 # --------------------------
-# MAIN
+# Main entry point
 # --------------------------
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -111,6 +113,7 @@ def main():
 
     print("✅ Bot is running...")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
