@@ -2,6 +2,8 @@
 import os
 import logging
 from dotenv import load_dotenv
+from flask import Flask
+import threading
 
 from telegram import Update
 from telegram.ext import (
@@ -15,7 +17,20 @@ from telegram.ext import (
 import google.generativeai as genai
 
 # --------------------------
-# LOGGING (errors visible only in terminal)
+# FLASK SERVER (to keep Render app alive)
+# --------------------------
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "✅ WriteRight Bot is running!"
+
+def run_flask():
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
+
+# --------------------------
+# LOGGING
 # --------------------------
 logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(message)s',
@@ -23,12 +38,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load env variables (works locally, ignored on Railway)
+# Load env variables
 load_dotenv()
-# debug presence only — safe: does NOT print secret values
-present = {k: (k in os.environ) for k in ("GOOGLE_API_KEY", "TELEGRAM_TOKEN")}
-logger.info("Env presence check: %s", present)
-
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -39,26 +50,37 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 if not GOOGLE_API_KEY or not TELEGRAM_TOKEN:
     raise ValueError(
         "Missing environment variables. "
-        "Make sure GOOGLE_API_KEY and TELEGRAM_TOKEN are set in Railway → Variables."
+        "Make sure GOOGLE_API_KEY and TELEGRAM_TOKEN are set."
     )
 
 # Configure Gemini
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-2.0-flash")
 
-
 # --------------------------
 # /start command
 # --------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hello! Send me a sentence to analyze.")
-
+    await update.message.reply_text(
+        "👋 Hello! I'm WriteRight.\n\n"
+        "Send me any sentence and I'll analyze it for:\n"
+        "• Grammar mistakes\n"
+        "• Spelling errors\n"
+        "• Better word choices\n"
+        "• Sentence structure\n\n"
+        "Just type anything and send!"
+    )
 
 # --------------------------
 # Grammar analysis handler
 # --------------------------
 async def analyze_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text or ""
+    
+    if not user_text.strip():
+        await update.message.reply_text("Please send me some text to analyze!")
+        return
+    
     status_msg = await update.message.reply_text("Analyzing... 🔍")
 
     try:
@@ -102,22 +124,24 @@ Text to analyze: {user_text}
                 await update.message.reply_text(output_text[i:i+MAX_LEN])
 
     except Exception as e:
-        logger.error("Error while processing text:", exc_info=True)
+        logger.error(f"Error while processing text: {e}")
         await status_msg.edit_text("⚠️ Sorry, something went wrong. Please try again.")
-
 
 # --------------------------
 # Main entry point
 # --------------------------
 def main():
+    # Start Flask server in a separate thread
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Start Telegram bot
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_text))
 
-    print("✅ Bot is running...")
+    logger.info("✅ Bot is running...")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
