@@ -17,7 +17,7 @@ from telegram.ext import (
 import google.generativeai as genai
 
 # --------------------------
-# FLASK SERVER (to keep Render app alive)
+# FLASK SERVER (Render keep-alive)
 # --------------------------
 app = Flask(__name__)
 
@@ -29,8 +29,9 @@ def run_flask():
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
 
+
 # --------------------------
-# LOGGING
+# LOGGING CONFIG
 # --------------------------
 logging.basicConfig(
     format='%(asctime)s | %(levelname)s | %(message)s',
@@ -38,56 +39,104 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load env variables
+# --------------------------
+# ENVIRONMENT VARIABLES
+# --------------------------
 load_dotenv()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-# --------------------------
-# Validate environment variables
-# --------------------------
 if not GOOGLE_API_KEY or not TELEGRAM_TOKEN:
-    raise ValueError(
-        "Missing environment variables. "
-        "Make sure GOOGLE_API_KEY and TELEGRAM_TOKEN are set."
-    )
+    raise ValueError("Missing GOOGLE_API_KEY or TELEGRAM_TOKEN in .env")
 
-# Configure Gemini
+# Gemini configuration
 genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel("gemini-2.0-flash")
 
-# --------------------------
-# /start command
-# --------------------------
+
+# ================================================================
+# COMMAND HANDLERS
+# ================================================================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "check"
     await update.message.reply_text(
         "👋 Hello! I'm WriteRight.\n\n"
-        "Send me any sentence and I'll analyze it for:\n"
-        "• Grammar mistakes\n"
-        "• Spelling errors\n"
-        "• Better word choices\n"
-        "• Sentence structure\n\n"
-        "Just type anything and send!"
+        "Send me any sentence and I'll analyze it.\n"
+        "Use /help to see all available commands."
     )
 
-# --------------------------
-# Grammar analysis handler
-# --------------------------
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📘 *WriteRight Commands*\n\n"
+        "/start – Start the bot and show welcome message\n"
+        "/help – Show full command list\n"
+        "/check – Analyze grammar & correctness\n"
+        "/rewrite – Rewrite your text clearly & naturally\n"
+        "/explain – Explain grammar rules in your sentence\n"
+        "/improve – Suggest improvements to make writing better\n"
+        "/clear – Reset conversation\n\n"
+        "Just send any text after selecting a mode."
+    )
+    await update.message.reply_text(help_text)
+
+
+async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "check"
+    await update.message.reply_text("📝 Mode set to *Grammar Check*. Send the text you want me to analyze.")
+
+
+async def rewrite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "rewrite"
+    await update.message.reply_text("✍️ Mode set to *Rewrite*. Send the text you want rewritten.")
+
+
+async def explain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "explain"
+    await update.message.reply_text("📘 Mode set to *Grammar Explain*. Send the sentence you want explained.")
+
+
+async def improve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "improve"
+    await update.message.reply_text("💡 Mode set to *Improve Writing*. Send the text you want improved.")
+
+
+async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data["mode"] = "check"
+    await update.message.reply_text("🔄 Conversation reset. Default mode: Grammar Check.")
+
+
+# ================================================================
+# MAIN TEXT HANDLER (Gemini Processing)
+# ================================================================
 async def analyze_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text or ""
-    
-    if not user_text.strip():
-        await update.message.reply_text("Please send me some text to analyze!")
-        return
-    
-    status_msg = await update.message.reply_text("Analyzing... 🔍")
+    mode = context.user_data.get("mode", "check")
 
-    try:
-        prompt = f"""
-You are GrammarGuide, an English writing tutor.
+    status_msg = await update.message.reply_text("Analyzing… 🔍")
 
-Analyze the following text and return a response in this EXACT format:
+    # Select task by mode
+    if mode == "check":
+        task = "Analyze grammar and correctness."
+    elif mode == "rewrite":
+        task = "Rewrite this text clearly and naturally."
+    elif mode == "explain":
+        task = "Explain the grammar rules used in this sentence."
+    elif mode == "improve":
+        task = "Suggest improvements to make this writing better."
+    else:
+        task = "Analyze grammar and correctness."
+
+    # Prompt for Gemini
+    prompt = f"""
+You are WriteRight, an English writing tutor.
+
+Task: {task}
+
+Provide results using the following structure:
 
 📝 REVIEW:
 [Correct / Partially Correct / Incorrect]
@@ -106,42 +155,50 @@ Analyze the following text and return a response in this EXACT format:
 ✅ CORRECTED TEXT:
 [text]
 
-Rules:
-- If multiple errors exist, repeat the '🔍 ERRORS FOUND' section for each.
-- Output plain text only. No markdown fences.
-Text to analyze: {user_text}
+User text: {user_text}
 """
 
+    try:
         response = model.generate_content(prompt)
-        output_text = str(response.text).strip().replace("```", "")
+        output = response.text.strip().replace("```", "")
 
-        MAX_LEN = 4000
-        if len(output_text) <= MAX_LEN:
-            await status_msg.edit_text(output_text)
+        # Telegram length safety
+        if len(output) <= 4000:
+            await status_msg.edit_text(output)
         else:
             await status_msg.delete()
-            for i in range(0, len(output_text), MAX_LEN):
-                await update.message.reply_text(output_text[i:i+MAX_LEN])
+            for i in range(0, len(output), 4000):
+                await update.message.reply_text(output[i:i+4000])
 
     except Exception as e:
-        logger.error(f"Error while processing text: {e}")
-        await status_msg.edit_text("⚠️ Sorry, something went wrong. Please try again.")
+        logger.error(f"ERROR: {e}")
+        await status_msg.edit_text("⚠️ Something went wrong. Please try again.")
 
-# --------------------------
-# Main entry point
-# --------------------------
+
+
 def main():
-    # Start Flask server in a separate thread
+    # Start Flask server for Render uptime
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
-    
-    # Start Telegram bot
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_text))
 
-    logger.info("✅ Bot is running...")
-    app.run_polling()
+    # Telegram bot
+    tg_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    # Register commands
+    tg_app.add_handler(CommandHandler("start", start))
+    tg_app.add_handler(CommandHandler("help", help_command))
+    tg_app.add_handler(CommandHandler("check", check_command))
+    tg_app.add_handler(CommandHandler("rewrite", rewrite_command))
+    tg_app.add_handler(CommandHandler("explain", explain_command))
+    tg_app.add_handler(CommandHandler("improve", improve_command))
+    tg_app.add_handler(CommandHandler("clear", clear_command))
+
+    # Text handler
+    tg_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, analyze_text))
+
+    logger.info("🚀 WriteRight Bot is running...")
+    tg_app.run_polling()
+
 
 if __name__ == "__main__":
     main()
