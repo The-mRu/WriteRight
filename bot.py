@@ -1,3 +1,4 @@
+# bot.py
 import os
 import logging
 from dotenv import load_dotenv
@@ -55,9 +56,40 @@ model = genai.GenerativeModel("gemini-2.0-flash")
 
 
 # ================================================================
+# FUNCTION: Wrap corrected text in Telegram code block
+# ================================================================
+def wrap_corrected_text_block(output: str) -> str:
+    """
+    Detects the '✅ CORRECTED TEXT:' section and wraps ONLY the corrected text
+    inside a Telegram Markdown code block (```), enabling a copy button.
+    """
+    marker = "✅ CORRECTED TEXT:"
+    if marker not in output:
+        return output
+
+    parts = output.split(marker, 1)
+    before = parts[0]
+    after = parts[1].lstrip()
+
+    # Identify corrected text (the first line after the marker)
+    lines = after.split("\n", 1)
+    corrected_line = lines[0].strip()
+
+    # Build a wrapped version
+    wrapped = f"```\n{corrected_line}\n```"
+
+    # Replace only the first corrected line
+    if len(lines) > 1:
+        new_after = wrapped + "\n" + lines[1]
+    else:
+        new_after = wrapped
+
+    return before + marker + "\n" + new_after
+
+
+# ================================================================
 # COMMAND HANDLERS
 # ================================================================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mode"] = "check"
     await update.message.reply_text(
@@ -68,23 +100,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    help_text = (
+    await update.message.reply_text(
         "📘 *WriteRight Commands*\n\n"
-        "/start – Start the bot and show welcome message\n"
-        "/help – Show full command list\n"
-        "/check – Analyze grammar & correctness\n"
-        "/rewrite – Rewrite your text clearly & naturally\n"
-        "/explain – Explain grammar rules in your sentence\n"
-        "/improve – Suggest improvements to make writing better\n"
-        "/clear – Reset conversation\n\n"
-        "Just send any text after selecting a mode."
+        "/start – Show welcome message\n"
+        "/help – List all commands\n"
+        "/check – Analyze grammar\n"
+        "/rewrite – Rewrite your text\n"
+        "/explain – Explain grammar rules\n"
+        "/improve – Improve clarity and style\n"
+        "/clear – Reset conversation\n"
     )
-    await update.message.reply_text(help_text)
 
 
 async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mode"] = "check"
-    await update.message.reply_text("📝 Mode set to *Grammar Check*. Send the text you want me to analyze.")
+    await update.message.reply_text("📝 Mode set to *Grammar Check*. Send the text you want analyzed.")
 
 
 async def rewrite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -94,12 +124,12 @@ async def rewrite_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def explain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mode"] = "explain"
-    await update.message.reply_text("📘 Mode set to *Grammar Explain*. Send the sentence you want explained.")
+    await update.message.reply_text("📘 Mode set to *Explain*. Send the sentence you want explained.")
 
 
 async def improve_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["mode"] = "improve"
-    await update.message.reply_text("💡 Mode set to *Improve Writing*. Send the text you want improved.")
+    await update.message.reply_text("💡 Mode set to *Improve*. Send the text you want enhanced.")
 
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,7 +139,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ================================================================
-# MAIN TEXT HANDLER (Gemini Processing)
+# MAIN GRAMMAR PROCESSING
 # ================================================================
 async def analyze_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text or ""
@@ -117,25 +147,25 @@ async def analyze_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     status_msg = await update.message.reply_text("Analyzing… 🔍")
 
-    # Select task by mode
+    # Task selection
     if mode == "check":
         task = "Analyze grammar and correctness."
     elif mode == "rewrite":
         task = "Rewrite this text clearly and naturally."
     elif mode == "explain":
-        task = "Explain the grammar rules used in this sentence."
+        task = "Explain grammar rules."
     elif mode == "improve":
-        task = "Suggest improvements to make this writing better."
+        task = "Suggest improvements."
     else:
-        task = "Analyze grammar and correctness."
+        task = "Analyze grammar."
 
-    # Prompt for Gemini
+    # Build prompt
     prompt = f"""
 You are WriteRight, an English writing tutor.
 
 Task: {task}
 
-Provide results using the following structure:
+Follow the structure below:
 
 📝 REVIEW:
 [Correct / Partially Correct / Incorrect]
@@ -159,28 +189,36 @@ User text: {user_text}
 
     try:
         response = model.generate_content(prompt)
-        output = response.text.strip().replace("```", "")
+        output = response.text.strip()
 
-        # Telegram length safety
+        # Clean any stray backticks
+        output = output.replace("```", "")
+
+        # Wrap ONLY corrected text
+        output = wrap_corrected_text_block(output)
+
+        # Send safely
         if len(output) <= 4000:
-            await status_msg.edit_text(output)
+            await status_msg.edit_text(output, parse_mode="Markdown")
         else:
             await status_msg.delete()
             for i in range(0, len(output), 4000):
-                await update.message.reply_text(output[i:i+4000])
+                await update.message.reply_text(output[i:i+4000], parse_mode="Markdown")
 
     except Exception as e:
         logger.error(f"ERROR: {e}")
         await status_msg.edit_text("⚠️ Something went wrong. Please try again.")
 
 
-
+# ================================================================
+# MAIN FUNCTION
+# ================================================================
 def main():
-    # Start Flask server for Render uptime
+    # Start Flask keep-alive
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Telegram bot
+    # Start Telegram bot
     tg_app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     # Register commands
